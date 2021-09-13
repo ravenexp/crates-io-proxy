@@ -1,0 +1,17 @@
+[package]
+name = "crates-io-proxy"
+description = "A dumb caching proxy for the crates.io download API"
+version = "0.1.0"
+authors = ["Sergey Kvachonok <ravenexp@gmail.com>"]
+edition = "2018"
+license = "MIT OR Apache-2.0"
+keywords = ["crates", "cargo", "registry", "cache"]
+categories = ["development-tools"]
+readme = "README.md"
+resolver = "2"
+
+[dependencies]
+rouille = { version = "3.3", default-features = false }
+pico-args = { version = "0.4", features = ["combined-flags"] }
+log = "0.4"
+env_logger = { version = "0.9", default-features = false }
