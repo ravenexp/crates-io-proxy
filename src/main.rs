@@ -5,18 +5,55 @@
 //! forwards them to <https://crates.io/> and caches the downloaded crates as
 //! `.crate` files on the local filesystem.
 
+use std::io::Read;
+
 use pico_args::Arguments;
 
 use env_logger::{Builder as LogBuilder, Env as LogEnv};
 use log::{debug, info, warn};
 
+use url::Url;
+
 use rouille::{log as log_request, router, start_server, Response};
+use ureq::{request_url, Error};
+
+/// Upstream `crates.io` download URL: also hardcoded in Cargo.
+const CRATES_IO_URL: &str = "https://crates.io/";
+
+/// Limit the download item size to 16 MiB
+const MAX_CRATE_SIZE: usize = 0x100_0000;
 
 /// Program version tag: `"<major>.<minor>.<patch>"`
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Downloads the crate file from <https://crates.io/>
+fn download_crate(base_url: &Url, name: &str, version: &str) -> Result<Vec<u8>, Error> {
+    let url = base_url
+        .join(&format!("/api/v1/crates/{}/{}/download", name, version))
+        .unwrap();
+
+    let resp = request_url("GET", &url).call()?;
+
+    if let Some(clen) = resp.header("Content-Length") {
+        let len: usize = clen.parse().unwrap();
+
+        if len > MAX_CRATE_SIZE {
+            // Insufficient Storage
+            return Err(Error::Status(507, resp));
+        }
+
+        let mut bytes: Vec<u8> = Vec::with_capacity(len);
+        resp.into_reader().read_to_end(&mut bytes)?;
+
+        Ok(bytes)
+    } else {
+        // Bad Gateway
+        Err(Error::Status(502, resp))
+    }
+}
+
 /// Runs Rouille HTTP server forever.
-fn main_loop(listen_addr: &str) -> ! {
+fn main_loop(listen_addr: &str, download_url: Url) -> ! {
     info!("Starting HTTP server at: {}", listen_addr);
 
     start_server(listen_addr, move |request| {
@@ -25,7 +62,9 @@ fn main_loop(listen_addr: &str) -> ! {
                 request,
                 (GET) (/api/v1/crates/{name: String}/{version: String}/download) => {
                     debug!("Download API endpoint hit: {}", request.url());
-                    Response::text(format!("Pretending to be {} v{}", name, version))
+
+                    let bytes = download_crate(&download_url, &name, &version).unwrap();
+                    Response::from_data("application/octet-stream", bytes)
                 },
                 _ => {
                     warn!("Unknown API endpoint hit: {}", request.url());
@@ -85,6 +124,11 @@ fn main() {
 
     LogBuilder::from_env(LogEnv::new().default_filter_or(loglevel)).init();
 
+    let download_url = Url::parse(CRATES_IO_URL).unwrap();
+    info!("Using crates.io server URL: {}", download_url);
+
+    let listen_addr = "0.0.0.0:3080";
+
     // Go run the main server
-    main_loop("0.0.0.0:3080")
+    main_loop(listen_addr, download_url)
 }
