@@ -10,7 +10,7 @@ use std::io::Read;
 use pico_args::Arguments;
 
 use env_logger::{Builder as LogBuilder, Env as LogEnv};
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 
 use url::Url;
 
@@ -22,6 +22,12 @@ const CRATES_IO_URL: &str = "https://crates.io/";
 
 /// Limit the download item size to 16 MiB
 const MAX_CRATE_SIZE: usize = 0x100_0000;
+
+/// HTTP Content-Type of the crate package file
+const CRATE_HTTP_CTYPE: &str = "application/x-tar";
+
+/// HTTP Content-Type of the download API error response
+const ERROR_HTTP_CTYPE: &str = "application/json; charset=utf-8";
 
 /// Program version tag: `"<major>.<minor>.<patch>"`
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -63,8 +69,27 @@ fn main_loop(listen_addr: &str, download_url: Url) -> ! {
                 (GET) (/api/v1/crates/{name: String}/{version: String}/download) => {
                     debug!("Download API endpoint hit: {}", request.url());
 
-                    let bytes = download_crate(&download_url, &name, &version).unwrap();
-                    Response::from_data("application/octet-stream", bytes)
+                    match download_crate(&download_url, &name, &version) {
+                        Ok(bytes) => {
+                            info!("Successfully downloaded {} v{}", name, version);
+                            Response::from_data(CRATE_HTTP_CTYPE, bytes)
+                        }
+                        // Return the HTTP error status received from crates.io
+                        Err(Error::Status(code, resp)) => {
+                            let default = r#"{"errors":[{"detail":"Unknown error"}]}"#;
+                            let err_json = resp.into_string().unwrap_or_else(|_| default.to_string());
+                            warn!("crates.io returned HTTP status {}: {}", code, err_json);
+
+                            Response::from_data(ERROR_HTTP_CTYPE, err_json).with_status_code(code)
+                        }
+                        // Return 502 Bad Gateway for connection errors
+                        Err(Error::Transport(err)) => {
+                            error!("Network error: {}", err);
+                            let err_json = format!(r#"{{"errors":[{{"detail":"{}"}}]}}"#, err);
+
+                            Response::from_data(ERROR_HTTP_CTYPE, err_json).with_status_code(502)
+                        }
+                    }
                 },
                 _ => {
                     warn!("Unknown API endpoint hit: {}", request.url());
