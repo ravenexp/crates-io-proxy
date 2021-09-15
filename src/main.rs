@@ -5,7 +5,9 @@
 //! forwards them to <https://crates.io/> and caches the downloaded crates as
 //! `.crate` files on the local filesystem.
 
-use std::io::Read;
+use std::fs::{create_dir_all, File};
+use std::io::{Read, Write};
+use std::path::Path;
 
 use pico_args::Arguments;
 
@@ -19,6 +21,9 @@ use ureq::{request_url, Error};
 
 /// Upstream `crates.io` download URL: also hardcoded in Cargo.
 const CRATES_IO_URL: &str = "https://crates.io/";
+
+/// Default crate files cache directory path
+const DEFAULT_CACHE_DIR: &str = "/var/cache/crates-io-proxy";
 
 /// Limit the download item size to 16 MiB
 const MAX_CRATE_SIZE: usize = 0x100_0000;
@@ -58,9 +63,39 @@ fn download_crate(base_url: &Url, name: &str, version: &str) -> Result<Vec<u8>, 
     }
 }
 
+/// Caches the crate package file on the local filesystem.
+fn cache_store_crate(dir: &Path, name: &str, version: &str, data: &[u8]) {
+    let pkgdir = dir.join(name);
+
+    if let Err(e) = create_dir_all(&pkgdir) {
+        error!("Failed to create pkg cache dir: {}", e);
+        return;
+    }
+
+    let pkgfile = pkgdir.join(format!("{}-{}.crate", name, version));
+
+    let mut file = match File::create(pkgfile) {
+        Ok(f) => f,
+        Err(e) => {
+            error!("Failed to create pkg cache file: {}", e);
+            return;
+        }
+    };
+
+    if let Err(e) = file.write_all(data) {
+        error!("Failed to write pkg cache file: {}", e);
+    }
+}
+
 /// Runs Rouille HTTP server forever.
-fn main_loop(listen_addr: &str, download_url: Url) -> ! {
+fn main_loop(listen_addr: &str, download_url: Url, cache_dir: &Path) -> ! {
     info!("Starting HTTP server at: {}", listen_addr);
+
+    let crates_dir = cache_dir.join("crates");
+    info!(
+        "Using crates cache directory: {}",
+        crates_dir.to_string_lossy()
+    );
 
     start_server(listen_addr, move |request| {
         log_request(request, std::io::stdout(), || {
@@ -72,6 +107,7 @@ fn main_loop(listen_addr: &str, download_url: Url) -> ! {
                     match download_crate(&download_url, &name, &version) {
                         Ok(bytes) => {
                             info!("Successfully downloaded {} v{}", name, version);
+                            cache_store_crate(&crates_dir, &name, &version, &bytes);
                             Response::from_data(CRATE_HTTP_CTYPE, bytes)
                         }
                         // Return the HTTP error status received from crates.io
@@ -154,6 +190,8 @@ fn main() {
 
     let listen_addr = "0.0.0.0:3080";
 
+    let cache_dir = Path::new(DEFAULT_CACHE_DIR);
+
     // Go run the main server
-    main_loop(listen_addr, download_url)
+    main_loop(listen_addr, download_url, cache_dir)
 }
