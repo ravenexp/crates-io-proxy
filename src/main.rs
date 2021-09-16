@@ -5,6 +5,7 @@
 //! forwards them to <https://crates.io/> and caches the downloaded crates as
 //! `.crate` files on the local filesystem.
 
+use std::env;
 use std::fs::{create_dir_all, read, File};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -18,6 +19,9 @@ use url::Url;
 
 use rouille::{log as log_request, router, start_server, Response};
 use ureq::{request_url, Error};
+
+/// Default listen address and port
+const LISTEN_ADDRESS: &str = "0.0.0.0:3080";
 
 /// Upstream `crates.io` download URL: also hardcoded in Cargo.
 const CRATES_IO_URL: &str = "https://crates.io/";
@@ -165,12 +169,22 @@ fn version() {
 fn usage() {
     println!("Usage:\n    crates-io-proxy [options]\n");
     println!("Options:");
-    println!("    -v, --verbose        print more debug info");
-    println!("    -h, --help           print help and exit");
-    println!("    -V, --version        print version and exit");
+    println!("    -v, --verbose              print more debug info");
+    println!("    -h, --help                 print help and exit");
+    println!("    -V, --version              print version and exit");
+    println!("    -L, --listen ADDRESS:PORT  address and port to listen at (0.0.0.0:3080)");
+    println!("    -U, --upstream-url URL     upstream crates.io URL (https://crates.io/)");
+    println!("    -C, --cache-dir DIR        proxy cache directory (/var/cache/crates-io-proxy)");
+    println!("\nEnvironment:");
+    println!("    CRATES_IO_URL              same as --upstream-url option");
+    println!("    CRATES_IO_PROXY_CACHE_DIR  same as --cache-dir option");
 }
 
 fn main() {
+    let crates_io_url = env::var("CRATES_IO_URL").unwrap_or_else(|_| CRATES_IO_URL.to_string());
+    let default_cache_dir =
+        env::var("CRATES_IO_PROXY_CACHE_DIR").unwrap_or_else(|_| DEFAULT_CACHE_DIR.to_string());
+
     let mut verbose: u32 = 0;
     let mut args = Arguments::from_env();
 
@@ -188,6 +202,21 @@ fn main() {
         verbose += 1;
     }
 
+    let listen_addr = args
+        .opt_value_from_str(["-L", "--listen"])
+        .expect("Bad listen address argument")
+        .unwrap_or_else(|| LISTEN_ADDRESS.to_string());
+
+    let url_string = args
+        .opt_value_from_str(["-U", "--upstream-url"])
+        .expect("Bad upstream URL argument")
+        .unwrap_or(crates_io_url);
+
+    let cache_dir_string = args
+        .opt_value_from_str(["-C", "--cache-dir"])
+        .expect("Bad cache directory argument")
+        .unwrap_or(default_cache_dir);
+
     let loglevel = match verbose {
         0 => "warn",
         1 => "info",
@@ -197,13 +226,12 @@ fn main() {
 
     LogBuilder::from_env(LogEnv::new().default_filter_or(loglevel)).init();
 
-    let download_url = Url::parse(CRATES_IO_URL).unwrap();
+    let download_url = Url::parse(&url_string).expect("Invalid upstream URL format");
+
     info!("Using crates.io server URL: {}", download_url);
 
-    let listen_addr = "0.0.0.0:3080";
-
-    let cache_dir = Path::new(DEFAULT_CACHE_DIR);
+    let cache_dir = Path::new(&cache_dir_string);
 
     // Go run the main server
-    main_loop(listen_addr, download_url, cache_dir)
+    main_loop(&listen_addr, download_url, cache_dir)
 }
