@@ -5,7 +5,7 @@
 //! forwards them to <https://crates.io/> and caches the downloaded crates as
 //! `.crate` files on the local filesystem.
 
-use std::fs::{create_dir_all, File};
+use std::fs::{create_dir_all, read, File};
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -87,6 +87,13 @@ fn cache_store_crate(dir: &Path, name: &str, version: &str, data: &[u8]) {
     }
 }
 
+/// Fetches the cached crate package file from the local filesystem, if present.
+fn cache_fetch_crate(dir: &Path, name: &str, version: &str) -> Option<Vec<u8>> {
+    let pkgfile = dir.join(name).join(format!("{}-{}.crate", name, version));
+
+    read(pkgfile).ok()
+}
+
 /// Runs Rouille HTTP server forever.
 fn main_loop(listen_addr: &str, download_url: Url, cache_dir: &Path) -> ! {
     info!("Starting HTTP server at: {}", listen_addr);
@@ -103,6 +110,11 @@ fn main_loop(listen_addr: &str, download_url: Url, cache_dir: &Path) -> ! {
                 request,
                 (GET) (/api/v1/crates/{name: String}/{version: String}/download) => {
                     debug!("Download API endpoint hit: {}", request.url());
+
+                    if let Some(bytes) = cache_fetch_crate(&crates_dir, &name, &version) {
+                        debug!("Local cache hit for {} v{}", name, version);
+                        return Response::from_data(CRATE_HTTP_CTYPE, bytes);
+                    }
 
                     match download_crate(&download_url, &name, &version) {
                         Ok(bytes) => {
