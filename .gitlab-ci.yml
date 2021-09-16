@@ -1,0 +1,8 @@
+docker-build:
+  stage: build
+  tags:
+    - create-linux-docker
+  script:
+    - docker build -t crates-io-proxy .
+    - docker tag crates-io-proxy:latest ${PLG_CI_DOCKER_PUSH}/crates-io-proxy:latest
+    - docker push ${PLG_CI_DOCKER_PUSH}/crates-io-proxy:latest
