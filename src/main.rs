@@ -42,28 +42,30 @@ const ERROR_HTTP_CTYPE: &str = "application/json; charset=utf-8";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Downloads the crate file from <https://crates.io/>
-fn download_crate(base_url: &Url, name: &str, version: &str) -> Result<Vec<u8>, Error> {
+fn download_crate(base_url: &Url, name: &str, version: &str) -> Result<Vec<u8>, Box<Error>> {
     let url = base_url
         .join(&format!("/api/v1/crates/{}/{}/download", name, version))
         .unwrap();
 
-    let resp = request_url("GET", &url).call()?;
+    let resp = request_url("GET", &url).call().map_err(Box::new)?;
 
     if let Some(clen) = resp.header("Content-Length") {
         let len: usize = clen.parse().unwrap();
 
         if len > MAX_CRATE_SIZE {
             // Insufficient Storage
-            return Err(Error::Status(507, resp));
+            return Err(Box::new(Error::Status(507, resp)));
         }
 
         let mut bytes: Vec<u8> = Vec::with_capacity(len);
-        resp.into_reader().read_to_end(&mut bytes)?;
+        resp.into_reader()
+            .read_to_end(&mut bytes)
+            .map_err(|e| Box::new(e.into()))?;
 
         Ok(bytes)
     } else {
         // Bad Gateway
-        Err(Error::Status(502, resp))
+        Err(Box::new(Error::Status(502, resp)))
     }
 }
 
@@ -98,6 +100,27 @@ fn cache_fetch_crate(dir: &Path, name: &str, version: &str) -> Option<Vec<u8>> {
     read(pkgfile).ok()
 }
 
+/// Builds a HTTP error response from an `ureq` client download error.
+fn make_error_response(client_err: Box<Error>) -> Response {
+    match *client_err {
+        // Return the HTTP error status received from crates.io
+        Error::Status(code, resp) => {
+            let unknown = r#"{"errors":[{"detail":"Unknown error"}]}"#;
+            let err_json = resp.into_string().unwrap_or_else(|_| unknown.to_string());
+            warn!("crates.io returned HTTP status {}: {}", code, err_json);
+
+            Response::from_data(ERROR_HTTP_CTYPE, err_json).with_status_code(code)
+        }
+        // Return 502 Bad Gateway for connection errors
+        Error::Transport(err) => {
+            error!("Network error: {}", err);
+            let err_json = format!(r#"{{"errors":[{{"detail":"{}"}}]}}"#, err);
+
+            Response::from_data(ERROR_HTTP_CTYPE, err_json).with_status_code(502)
+        }
+    }
+}
+
 /// Runs Rouille HTTP server forever.
 fn main_loop(listen_addr: &str, download_url: Url, cache_dir: &Path) -> ! {
     info!("Starting HTTP server at: {}", listen_addr);
@@ -126,21 +149,7 @@ fn main_loop(listen_addr: &str, download_url: Url, cache_dir: &Path) -> ! {
                             cache_store_crate(&crates_dir, &name, &version, &bytes);
                             Response::from_data(CRATE_HTTP_CTYPE, bytes)
                         }
-                        // Return the HTTP error status received from crates.io
-                        Err(Error::Status(code, resp)) => {
-                            let default = r#"{"errors":[{"detail":"Unknown error"}]}"#;
-                            let err_json = resp.into_string().unwrap_or_else(|_| default.to_string());
-                            warn!("crates.io returned HTTP status {}: {}", code, err_json);
-
-                            Response::from_data(ERROR_HTTP_CTYPE, err_json).with_status_code(code)
-                        }
-                        // Return 502 Bad Gateway for connection errors
-                        Err(Error::Transport(err)) => {
-                            error!("Network error: {}", err);
-                            let err_json = format!(r#"{{"errors":[{{"detail":"{}"}}]}}"#, err);
-
-                            Response::from_data(ERROR_HTTP_CTYPE, err_json).with_status_code(502)
-                        }
+                        Err(err) => make_error_response(err),
                     }
                 },
                 _ => {
