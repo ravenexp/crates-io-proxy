@@ -44,7 +44,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Downloads the crate file from <https://crates.io/>
 fn download_crate(base_url: &Url, name: &str, version: &str) -> Result<Vec<u8>, Box<Error>> {
     let url = base_url
-        .join(&format!("/api/v1/crates/{}/{}/download", name, version))
+        .join(&format!("/api/v1/crates/{name}/{version}/download"))
         .unwrap();
 
     let resp = request_url("GET", &url).call().map_err(Box::new)?;
@@ -69,33 +69,38 @@ fn download_crate(base_url: &Url, name: &str, version: &str) -> Result<Vec<u8>, 
     }
 }
 
+/// Builds the crate file name from `name` and `version`.
+fn pkg_file_name(name: &str, version: &str) -> String {
+    format!("{name}-{version}.crate")
+}
+
 /// Caches the crate package file on the local filesystem.
 fn cache_store_crate(dir: &Path, name: &str, version: &str, data: &[u8]) {
     let pkgdir = dir.join(name);
 
     if let Err(e) = create_dir_all(&pkgdir) {
-        error!("Failed to create pkg cache dir: {}", e);
+        error!("Failed to create pkg cache dir: {e}");
         return;
     }
 
-    let pkgfile = pkgdir.join(format!("{}-{}.crate", name, version));
+    let pkgfile = pkgdir.join(pkg_file_name(name, version));
 
     let mut file = match File::create(pkgfile) {
         Ok(f) => f,
         Err(e) => {
-            error!("Failed to create pkg cache file: {}", e);
+            error!("Failed to create pkg cache file: {e}");
             return;
         }
     };
 
     if let Err(e) = file.write_all(data) {
-        error!("Failed to write pkg cache file: {}", e);
+        error!("Failed to write pkg cache file: {e}");
     }
 }
 
 /// Fetches the cached crate package file from the local filesystem, if present.
 fn cache_fetch_crate(dir: &Path, name: &str, version: &str) -> Option<Vec<u8>> {
-    let pkgfile = dir.join(name).join(format!("{}-{}.crate", name, version));
+    let pkgfile = dir.join(name).join(pkg_file_name(name, version));
 
     read(pkgfile).ok()
 }
@@ -107,14 +112,14 @@ fn make_error_response(client_err: Box<Error>) -> Response {
         Error::Status(code, resp) => {
             let unknown = r#"{"errors":[{"detail":"Unknown error"}]}"#;
             let err_json = resp.into_string().unwrap_or_else(|_| unknown.to_string());
-            warn!("crates.io returned HTTP status {}: {}", code, err_json);
+            warn!("crates.io returned HTTP status {code}: {err_json}");
 
             Response::from_data(ERROR_HTTP_CTYPE, err_json).with_status_code(code)
         }
         // Return 502 Bad Gateway for connection errors
         Error::Transport(err) => {
             error!("Network error: {}", err);
-            let err_json = format!(r#"{{"errors":[{{"detail":"{}"}}]}}"#, err);
+            let err_json = format!(r#"{{"errors":[{{"detail":"{err}"}}]}}"#);
 
             Response::from_data(ERROR_HTTP_CTYPE, err_json).with_status_code(502)
         }
@@ -168,9 +173,9 @@ fn version() {
     let tag = option_env!("CI_COMMIT_REF_NAME");
 
     if let (Some(build), Some(rev), Some(tag)) = (build, rev, tag) {
-        println!("crates-io-proxy {}+{}.g{}.{}", VERSION, build, rev, tag,);
+        println!("crates-io-proxy {VERSION}+{build}.g{rev}.{tag}");
     } else {
-        println!("crates-io-proxy {}", VERSION);
+        println!("crates-io-proxy {VERSION}");
     }
 }
 
