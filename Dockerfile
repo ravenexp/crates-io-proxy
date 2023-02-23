@@ -18,6 +18,10 @@ cargo build --release
 ### Second stage: Copy the built application into the runtime image.
 FROM alpine:latest as runner
 
+LABEL version="0.1.3"
+LABEL description="crates.io proxy container image"
+LABEL maintainer="Sergey Kvachonok <ravenexp@gmail.com>"
+
 # Install the compiled executable into the system.
 COPY --from=builder /builds/crates-io-proxy/target/release/crates-io-proxy /usr/bin/crates-io-proxy
 

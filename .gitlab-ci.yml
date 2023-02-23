@@ -1,8 +1,20 @@
-docker-build:
-  stage: build
-  tags:
-    - create-linux-docker
-  script:
-    - docker build -t crates-io-proxy .
-    - docker tag crates-io-proxy:latest ${PLG_CI_DOCKER_PUSH}/crates-io-proxy:latest
-    - docker push ${PLG_CI_DOCKER_PUSH}/crates-io-proxy:latest
+variables:
+    IMAGE_VERSION: "0.1.3"
+
+default:
+    tags:
+      - create-linux-docker
+
+build:
+    stage: build
+    script:
+      - docker build -t crates-io-proxy:latest -t crates-io-proxy:${IMAGE_VERSION} --no-cache .
+
+push:
+    stage: deploy
+    only:
+      - tags
+    script:
+      - docker tag crates-io-proxy:latest ${PLG_CI_DOCKER_PUSH}/crates-io-proxy:latest
+      - docker tag crates-io-proxy:${IMAGE_VERSION} ${PLG_CI_DOCKER_PUSH}/crates-io-proxy:${IMAGE_VERSION}
+      - docker push --all-tags ${PLG_CI_DOCKER_PUSH}/crates-io-proxy
