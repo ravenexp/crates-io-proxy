@@ -13,8 +13,7 @@ COPY . .
 # Install the build deps and build the application with cargo.
 RUN \
 apk add musl-dev && \
-cargo build --release && \
-strip target/release/crates-io-proxy
+cargo build --release
 
 ### Second stage: Copy the built application into the runtime image.
 FROM alpine:latest as runner

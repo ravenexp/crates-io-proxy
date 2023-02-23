@@ -18,3 +18,7 @@ ureq = "2.6"
 pico-args = { version = "0.5", features = ["combined-flags"] }
 log = "0.4"
 env_logger = { version = "0.10", default-features = false }
+
+[profile.release]
+lto = true
+strip = true
