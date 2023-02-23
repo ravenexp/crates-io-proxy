@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2023-02-23
+
+### CI configuration
+
+- Build versioned Docker images
+
+### Refactor
+
+- Fix Clippy warnings
+
+### Build
+
+- Update build dependencies
+- Use Cargo build profile for stripping
+
 ## [0.1.2] - 2022-11-15
 
 ### CI configuration
