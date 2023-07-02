@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2023-07-02
+
+### CI configuration
+
+- Add container build check job
+- Publish tagged versions to crates.io
+
+### Build
+
+- Update dependencies and Cargo metadata
+
 ## [0.1.3] - 2023-02-23
 
 ### CI configuration
