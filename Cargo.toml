@@ -1,24 +1,24 @@
 [package]
 name = "crates-io-proxy"
 description = "A dumb caching proxy for the crates.io download API"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["Sergey Kvachonok <ravenexp@gmail.com>"]
 edition = "2021"
 homepage = "https://github.com/ravenexp/crates-io-proxy"
 repository = "https://github.com/ravenexp/crates-io-proxy"
 license = "MIT OR Apache-2.0"
-keywords = ["crates", "cargo", "registry", "cache"]
-categories = ["development-tools"]
+keywords = ["crates", "cargo", "registry", "proxy", "cache"]
+categories = ["development-tools", "caching", "web-programming::http-server"]
 readme = "README.md"
 
 [dependencies]
 rouille = { version = "3.6", default-features = false }
-url = "2.3"
-ureq = "2.6"
+url = "2.4"
+ureq = "2.7"
 pico-args = { version = "0.5", features = ["combined-flags"] }
 log = "0.4"
 env_logger = { version = "0.10", default-features = false }
 
 [profile.release]
 lto = true
-strip = true
+strip = "debuginfo"

@@ -18,7 +18,7 @@ cargo build --release
 ### Second stage: Copy the built application into the runtime image.
 FROM alpine:latest as runner
 
-LABEL version="0.1.3"
+LABEL version="0.1.4"
 LABEL description="crates.io proxy container image"
 LABEL maintainer="Sergey Kvachonok <ravenexp@gmail.com>"
 
