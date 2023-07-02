@@ -1,4 +1,4 @@
-name: Rust checks
+name: Rust and container build checks
 
 on:
   push:
@@ -31,3 +31,10 @@ jobs:
     - uses: actions/checkout@v3
     - name: Run cargo clippy
       run: cargo clippy --tests -- --deny warnings
+  pod-build:
+    name: Container build test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Run podman build
+      run: podman build .
