@@ -1,7 +1,7 @@
 [package]
 name = "crates-io-proxy"
 description = "A dumb caching proxy for the crates.io download API"
-version = "0.1.4"
+version = "0.2.0"
 authors = ["Sergey Kvachonok <ravenexp@gmail.com>"]
 edition = "2021"
 homepage = "https://github.com/ravenexp/crates-io-proxy"
@@ -12,7 +12,7 @@ categories = ["development-tools", "caching", "web-programming::http-server"]
 readme = "README.md"
 
 [dependencies]
-rouille = { version = "3.6", default-features = false }
+tiny_http = "0.12"
 url = "2.4"
 ureq = "2.7"
 pico-args = { version = "0.5", features = ["combined-flags"] }
