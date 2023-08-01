@@ -7,6 +7,7 @@
 
 mod config_json;
 mod crate_info;
+mod index_entry;
 
 use std::env;
 use std::fmt::Display;
@@ -25,9 +26,13 @@ use url::Url;
 
 use crate::config_json::{gen_config_json_file, is_config_json_url};
 use crate::crate_info::CrateInfo;
+use crate::index_entry::IndexEntry;
 
 /// Default listen address and port
 const LISTEN_ADDRESS: &str = "0.0.0.0:3080";
+
+/// Upstream `crates.io` registry index URL
+const INDEX_CRATES_IO_URL: &str = "https://index.crates.io/";
 
 /// Upstream `crates.io` registry URL
 const CRATES_IO_URL: &str = "https://crates.io/";
@@ -44,8 +49,14 @@ const CRATES_API_PATH: &str = "/api/v1/crates/";
 /// Default crate files cache directory path
 const DEFAULT_CACHE_DIR: &str = "/var/cache/crates-io-proxy";
 
+/// Default index entry download buffer capacity
+const INDEX_ENTRY_CAPACITY: usize = 0x10000;
+
 /// Limit the download item size to 16 MiB
 const MAX_CRATE_SIZE: usize = 0x100_0000;
+
+/// HTTP Content-Type of the registry index entry JSON file
+const INDEX_HTTP_CTYPE: &str = "Content-Type: text/plain";
 
 /// HTTP Content-Type of the crate package file
 const CRATE_HTTP_CTYPE: &str = "Content-Type: application/x-tar";
@@ -59,6 +70,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Proxy server configuration
 #[derive(Debug, Clone)]
 struct ProxyConfig {
+    /// Upstream registry index URL (defaults to [`INDEX_CRATES_IO_URL`])
+    index_url: Url,
+
     /// Upstream crate download URL (defaults to [`CRATES_IO_URL`])
     upstream_url: Url,
 
@@ -67,6 +81,18 @@ struct ProxyConfig {
 
     /// Crate files cache directory (defaults to [`DEFAULT_CACHE_DIR`])
     crates_dir: PathBuf,
+}
+
+/// Registry index entry download response
+struct IndexResponse {
+    /// Index entry requested + response metadata
+    entry: IndexEntry,
+
+    /// HTTP response status code
+    status: u16,
+
+    /// HTTP response data
+    data: Vec<u8>,
 }
 
 /// Gets the server-global ureq client instance.
@@ -113,6 +139,34 @@ fn download_crate(site_url: &Url, crate_info: &CrateInfo) -> Result<Vec<u8>, Box
         // HTTP 502 Bad Gateway
         Err(Box::new(ureq::Error::Status(502, response)))
     }
+}
+
+/// Downloads the sparse index entry from the upstream registry.
+/// (usually <https://index.crates.io/>).
+fn download_index_entry(
+    index_url: &Url,
+    entry: IndexEntry,
+) -> Result<IndexResponse, Box<ureq::Error>> {
+    let url = index_url.join(&entry.to_index_url()).unwrap();
+
+    let response = ureq_agent()
+        .request_url("GET", &url)
+        .call()
+        .map_err(Box::new)?;
+
+    let status = response.status();
+
+    let mut data: Vec<u8> = Vec::with_capacity(INDEX_ENTRY_CAPACITY);
+    response
+        .into_reader()
+        .read_to_end(&mut data)
+        .map_err(|e| Box::new(e.into()))?;
+
+    Ok(IndexResponse {
+        entry,
+        status,
+        data,
+    })
 }
 
 /// Caches the crate package file on the local filesystem.
@@ -172,6 +226,16 @@ fn send_crate_data_response(request: Request, data: Vec<u8>) {
     request.respond(response).unwrap_or_else(log_send_error);
 }
 
+/// Sends the registry index entry download response.
+fn send_index_entry_data_response(request: Request, response: IndexResponse) {
+    let content_type = INDEX_HTTP_CTYPE.parse::<Header>().unwrap();
+    let response = Response::from_data(response.data)
+        .with_status_code(response.status)
+        .with_header(content_type);
+
+    request.respond(response).unwrap_or_else(log_send_error);
+}
+
 /// Formats the crate download API JSON error response.
 #[must_use]
 fn format_json_error(error: impl Display) -> String {
@@ -217,6 +281,29 @@ fn forward_download_request(request: Request, crate_info: CrateInfo, config: Pro
         .expect("failed to spawn the crate download thread");
 }
 
+/// Forwards the registry index entry download request to the upstream server.
+///
+/// Processes the download request in a dedicated thread.
+fn forward_index_request(request: Request, entry: IndexEntry, config: ProxyConfig) {
+    let thread_name = format!("worker-fetch-index-{entry}");
+
+    let thread_proc = move || match download_index_entry(&config.index_url, entry) {
+        Ok(response) => {
+            info!(
+                "fetch: successfully got index entry for {entry}",
+                entry = response.entry
+            );
+            send_index_entry_data_response(request, response);
+        }
+        Err(err) => send_fetch_error_response(request, err),
+    };
+
+    std::thread::Builder::new()
+        .name(thread_name)
+        .spawn(thread_proc)
+        .expect("failed to spawn the index download thread");
+}
+
 /// Processes one crate download API request.
 fn handle_download_request(request: Request, crate_url: &str, config: &ProxyConfig) {
     let Some(crate_info) = CrateInfo::try_from_download_url(crate_url) else {
@@ -237,12 +324,21 @@ fn handle_download_request(request: Request, crate_url: &str, config: &ProxyConf
 
 /// Processes one sparse registry index API request.
 fn handle_index_request(request: Request, index_url: &str, config: &ProxyConfig) {
-    debug!("proxy: index access: {index_url}");
-
     if is_config_json_url(index_url) {
         debug!("proxy: sending registry config file");
         send_json_response(request, 200, gen_config_json_file(config));
+        return;
     }
+
+    let Some(index_entry) = IndexEntry::try_from_index_url(index_url) else {
+        warn!("proxy: malformed registry index path: {index_url}");
+        send_error_response(request, 404);
+        return;
+    };
+
+    debug!("proxy: requesting index entry for {index_entry}");
+
+    forward_index_request(request, index_entry, config.clone());
 }
 
 /// Processes one HTTP GET request.
@@ -307,15 +403,19 @@ fn usage() {
     println!("    -V, --version              print version and exit");
     println!("    -L, --listen ADDRESS:PORT  address and port to listen at (0.0.0.0:3080)");
     println!("    -U, --upstream-url URL     upstream download URL (https://crates.io/)");
+    println!("    -I, --index-url URL        upstream index URL (https://index.crates.io/)");
     println!("    -S, --proxy-url URL        this proxy server URL (http://localhost/)");
     println!("    -C, --cache-dir DIR        proxy cache directory (/var/cache/crates-io-proxy)");
     println!("\nEnvironment:");
+    println!("    INDEX_CRATES_IO_URL        same as --index-url option");
     println!("    CRATES_IO_URL              same as --upstream-url option");
     println!("    CRATES_IO_PROXY_URL        same as --proxy-url option");
     println!("    CRATES_IO_PROXY_CACHE_DIR  same as --cache-dir option");
 }
 
 fn main() {
+    let index_crates_io_url =
+        env::var("INDEX_CRATES_IO_URL").unwrap_or_else(|_| INDEX_CRATES_IO_URL.to_string());
     let crates_io_url = env::var("CRATES_IO_URL").unwrap_or_else(|_| CRATES_IO_URL.to_string());
     let default_proxy_url =
         env::var("CRATES_IO_PROXY_URL").unwrap_or_else(|_| DEFAULT_PROXY_URL.to_string());
@@ -344,6 +444,11 @@ fn main() {
         .expect("bad listen address argument")
         .unwrap_or_else(|| LISTEN_ADDRESS.to_string());
 
+    let index_url_string = args
+        .opt_value_from_str(["-I", "--index-url"])
+        .expect("bad upstream index URL argument")
+        .unwrap_or(index_crates_io_url);
+
     let upstream_url_string = args
         .opt_value_from_str(["-U", "--upstream-url"])
         .expect("bad upstream download URL argument")
@@ -368,6 +473,10 @@ fn main() {
 
     LogBuilder::from_env(LogEnv::new().default_filter_or(loglevel)).init();
 
+    let index_url = Url::parse(&index_url_string).expect("invalid upstream URL format");
+
+    info!("proxy: using upstream index URL: {index_url}");
+
     let upstream_url = Url::parse(&upstream_url_string).expect("invalid upstream URL format");
 
     info!("proxy: using upstream download URL: {upstream_url}");
@@ -385,6 +494,7 @@ fn main() {
     );
 
     let config = ProxyConfig {
+        index_url,
         upstream_url,
         proxy_url,
         crates_dir,
