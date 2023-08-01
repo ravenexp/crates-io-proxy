@@ -5,6 +5,7 @@
 //! forwards them to <https://crates.io/> and caches the downloaded crates as
 //! `.crate` files on the local filesystem.
 
+mod config_json;
 mod crate_info;
 
 use std::env;
@@ -22,6 +23,7 @@ use log::{debug, error, info, warn};
 use tiny_http::{Header, Method, Request, Response, Server};
 use url::Url;
 
+use crate::config_json::{gen_config_json_file, is_config_json_url};
 use crate::crate_info::CrateInfo;
 
 /// Default listen address and port
@@ -29,6 +31,12 @@ const LISTEN_ADDRESS: &str = "0.0.0.0:3080";
 
 /// Upstream `crates.io` registry URL
 const CRATES_IO_URL: &str = "https://crates.io/";
+
+/// Default external URL of this proxy server
+const DEFAULT_PROXY_URL: &str = "http://localhost:3080/";
+
+/// Sparse registry index access path
+const CRATES_INDEX_PATH: &str = "/index/";
 
 /// Crates download API path
 const CRATES_API_PATH: &str = "/api/v1/crates/";
@@ -51,10 +59,13 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Proxy server configuration
 #[derive(Debug, Clone)]
 struct ProxyConfig {
-    /// Upstream crate download url (defaults to [`CRATES_IO_URL`])
+    /// Upstream crate download URL (defaults to [`CRATES_IO_URL`])
     upstream_url: Url,
 
-    /// Crate files cache directory
+    /// External URL of this proxy server (defaults to [`DEFAULT_PROXY_URL`])
+    proxy_url: Url,
+
+    /// Crate files cache directory (defaults to [`DEFAULT_CACHE_DIR`])
     crates_dir: PathBuf,
 }
 
@@ -224,19 +235,30 @@ fn handle_download_request(request: Request, crate_url: &str, config: &ProxyConf
     }
 }
 
+/// Processes one sparse registry index API request.
+fn handle_index_request(request: Request, index_url: &str, config: &ProxyConfig) {
+    debug!("proxy: index access: {index_url}");
+
+    if is_config_json_url(index_url) {
+        debug!("proxy: sending registry config file");
+        send_json_response(request, 200, gen_config_json_file(config));
+    }
+}
+
 /// Processes one HTTP GET request.
 ///
-/// Only crate download requests are currently supported.
+/// Only registry index and download API requests are supported.
 fn handle_get_request(request: Request, config: &ProxyConfig) {
     let url = request.url().to_owned();
 
-    let Some(crate_url) = url.strip_prefix(CRATES_API_PATH) else {
-        warn!("proxy: unknown download API path: {url}");
+    if let Some(index_url) = url.strip_prefix(CRATES_INDEX_PATH) {
+        handle_index_request(request, index_url, config);
+    } else if let Some(crate_url) = url.strip_prefix(CRATES_API_PATH) {
+        handle_download_request(request, crate_url, config);
+    } else {
+        warn!("proxy: unknown index or download API path: {url}");
         send_error_response(request, 404);
-        return;
     };
-
-    handle_download_request(request, crate_url, config);
 }
 
 /// Runs HTTP proxy server forever.
@@ -284,15 +306,19 @@ fn usage() {
     println!("    -h, --help                 print help and exit");
     println!("    -V, --version              print version and exit");
     println!("    -L, --listen ADDRESS:PORT  address and port to listen at (0.0.0.0:3080)");
-    println!("    -U, --upstream-url URL     upstream crates.io URL (https://crates.io/)");
+    println!("    -U, --upstream-url URL     upstream download URL (https://crates.io/)");
+    println!("    -S, --proxy-url URL        this proxy server URL (http://localhost/)");
     println!("    -C, --cache-dir DIR        proxy cache directory (/var/cache/crates-io-proxy)");
     println!("\nEnvironment:");
     println!("    CRATES_IO_URL              same as --upstream-url option");
+    println!("    CRATES_IO_PROXY_URL        same as --proxy-url option");
     println!("    CRATES_IO_PROXY_CACHE_DIR  same as --cache-dir option");
 }
 
 fn main() {
     let crates_io_url = env::var("CRATES_IO_URL").unwrap_or_else(|_| CRATES_IO_URL.to_string());
+    let default_proxy_url =
+        env::var("CRATES_IO_PROXY_URL").unwrap_or_else(|_| DEFAULT_PROXY_URL.to_string());
     let default_cache_dir =
         env::var("CRATES_IO_PROXY_CACHE_DIR").unwrap_or_else(|_| DEFAULT_CACHE_DIR.to_string());
 
@@ -320,8 +346,13 @@ fn main() {
 
     let upstream_url_string = args
         .opt_value_from_str(["-U", "--upstream-url"])
-        .expect("bad upstream URL argument")
+        .expect("bad upstream download URL argument")
         .unwrap_or(crates_io_url);
+
+    let proxy_url_string = args
+        .opt_value_from_str(["-S", "--proxy-url"])
+        .expect("bad proxy URL argument")
+        .unwrap_or(default_proxy_url);
 
     let cache_dir_string = args
         .opt_value_from_str(["-C", "--cache-dir"])
@@ -339,7 +370,11 @@ fn main() {
 
     let upstream_url = Url::parse(&upstream_url_string).expect("invalid upstream URL format");
 
-    info!("proxy: using upstream server URL: {upstream_url}");
+    info!("proxy: using upstream download URL: {upstream_url}");
+
+    let proxy_url = Url::parse(&proxy_url_string).expect("invalid proxy URL format");
+
+    info!("proxy: using proxy server URL: {proxy_url}");
 
     let cache_dir = PathBuf::from(cache_dir_string);
     let crates_dir = cache_dir.join("crates");
@@ -351,6 +386,7 @@ fn main() {
 
     let config = ProxyConfig {
         upstream_url,
+        proxy_url,
         crates_dir,
     };
 
