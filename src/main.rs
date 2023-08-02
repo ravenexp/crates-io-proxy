@@ -145,16 +145,30 @@ fn download_crate(site_url: &Url, crate_info: &CrateInfo) -> Result<Vec<u8>, Box
 /// (usually <https://index.crates.io/>).
 fn download_index_entry(
     index_url: &Url,
-    entry: IndexEntry,
+    mut entry: IndexEntry,
 ) -> Result<IndexResponse, Box<ureq::Error>> {
     let url = index_url.join(&entry.to_index_url()).unwrap();
 
-    let response = ureq_agent()
-        .request_url("GET", &url)
-        .call()
-        .map_err(Box::new)?;
+    let mut request = ureq_agent().request_url("GET", &url);
+
+    // Add cache control headers to all index requests.
+    if let Some(etag) = entry.etag() {
+        request = request.set("If-None-Match", etag);
+    } else if let Some(last_modified) = entry.last_modified() {
+        request = request.set("If-Modified-Since", &last_modified);
+    }
+
+    let response = request.call().map_err(Box::new)?;
 
     let status = response.status();
+
+    // Update the index entry metadata from the upstream response.
+    if let Some(etag) = response.header("ETag") {
+        entry.set_etag(etag);
+    }
+    if let Some(last_modified) = response.header("Last-Modified") {
+        entry.set_last_modified(last_modified);
+    }
 
     let mut data: Vec<u8> = Vec::with_capacity(INDEX_ENTRY_CAPACITY);
     response
@@ -229,9 +243,20 @@ fn send_crate_data_response(request: Request, data: Vec<u8>) {
 /// Sends the registry index entry download response.
 fn send_index_entry_data_response(request: Request, response: IndexResponse) {
     let content_type = INDEX_HTTP_CTYPE.parse::<Header>().unwrap();
-    let response = Response::from_data(response.data)
+    let entry = response.entry;
+    let mut response = Response::from_data(response.data)
         .with_status_code(response.status)
         .with_header(content_type);
+
+    // Add cache control headers to all index responses.
+    if let Some(etag) = entry.etag() {
+        let etag = Header::from_bytes("ETag", etag).unwrap();
+        response = response.with_header(etag);
+    };
+    if let Some(last_modified) = entry.last_modified() {
+        let last_modified = Header::from_bytes("Last-Modified", last_modified).unwrap();
+        response = response.with_header(last_modified);
+    };
 
     request.respond(response).unwrap_or_else(log_send_error);
 }
@@ -289,10 +314,19 @@ fn forward_index_request(request: Request, entry: IndexEntry, config: ProxyConfi
 
     let thread_proc = move || match download_index_entry(&config.index_url, entry) {
         Ok(response) => {
-            info!(
-                "fetch: successfully got index entry for {entry}",
-                entry = response.entry
-            );
+            // Check for HTTP 200 or HTTP 304 statuses.
+            if response.status == 200 {
+                info!(
+                    "fetch: successfully got index entry for {entry}",
+                    entry = response.entry
+                );
+            } else {
+                debug!(
+                    "fetch: cached index entry for {entry} is up to date",
+                    entry = response.entry
+                );
+            }
+
             send_index_entry_data_response(request, response);
         }
         Err(err) => send_fetch_error_response(request, err),
@@ -330,13 +364,27 @@ fn handle_index_request(request: Request, index_url: &str, config: &ProxyConfig)
         return;
     }
 
-    let Some(index_entry) = IndexEntry::try_from_index_url(index_url) else {
+    let Some(mut index_entry) = IndexEntry::try_from_index_url(index_url) else {
         warn!("proxy: malformed registry index path: {index_url}");
         send_error_response(request, 404);
         return;
     };
 
     debug!("proxy: requesting index entry for {index_entry}");
+
+    // Extract cache control headers from all index requests.
+    for header in request.headers() {
+        if header.field.equiv("If-None-Match") {
+            let etag = header.value.as_str();
+            debug!("proxy: checking known index entry {index_entry} with ETag {etag}");
+            index_entry.set_etag(etag);
+        }
+        if header.field.equiv("If-Modified-Since") {
+            let last_modified = header.value.as_str();
+            debug!("proxy: checking known index entry {index_entry} with Last-Modified {last_modified}");
+            index_entry.set_last_modified(last_modified);
+        }
+    }
 
     forward_index_request(request, index_entry, config.clone());
 }

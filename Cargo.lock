@@ -49,6 +49,7 @@ name = "crates-io-proxy"
 version = "0.2.0"
 dependencies = [
  "env_logger",
+ "httpdate",
  "log",
  "pico-args",
  "tiny_http",

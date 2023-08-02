@@ -13,6 +13,7 @@ readme = "README.md"
 
 [dependencies]
 tiny_http = "0.12"
+httpdate = "1.0"
 url = "2.4"
 ureq = "2.7"
 pico-args = { version = "0.5", features = ["combined-flags"] }

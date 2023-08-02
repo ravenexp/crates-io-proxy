@@ -3,6 +3,8 @@
 use std::fmt::{Display, Formatter, Result};
 use std::time::SystemTime;
 
+use httpdate::{fmt_http_date, parse_http_date};
+
 /// Registry index entry structure
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct IndexEntry {
@@ -53,6 +55,26 @@ impl IndexEntry {
                 _ => None,
             },
         }
+    }
+
+    /// Gets the HTTP entity tag metadata.
+    pub fn etag(&self) -> Option<&str> {
+        self.etag.as_deref()
+    }
+
+    /// Gets the HTTP Last-Modified metadata.
+    pub fn last_modified(&self) -> Option<String> {
+        self.mtime.map(fmt_http_date)
+    }
+
+    /// Sets the HTTP entity tag metadata.
+    pub fn set_etag(&mut self, etag: &str) {
+        self.etag = Some(etag.to_owned());
+    }
+
+    /// Sets the HTTP Last-Modified metadata.
+    pub fn set_last_modified(&mut self, last_modified: &str) {
+        self.mtime = parse_http_date(last_modified).ok();
     }
 
     /// Builds the index entry download URL (relative).
