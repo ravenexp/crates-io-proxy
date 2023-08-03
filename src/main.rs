@@ -7,13 +7,12 @@
 
 mod config_json;
 mod crate_info;
+mod file_cache;
 mod index_entry;
 
 use std::env;
 use std::fmt::Display;
-use std::fs::{create_dir_all, read, File};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use pico_args::Arguments;
@@ -26,6 +25,7 @@ use url::Url;
 
 use crate::config_json::{gen_config_json_file, is_config_json_url};
 use crate::crate_info::CrateInfo;
+use crate::file_cache::{cache_fetch_crate, cache_store_crate};
 use crate::index_entry::IndexEntry;
 
 /// Default listen address and port
@@ -181,31 +181,6 @@ fn download_index_entry(
         status,
         data,
     })
-}
-
-/// Caches the crate package file on the local filesystem.
-fn cache_store_crate(dir: &Path, crate_info: &CrateInfo, data: &[u8]) {
-    let crate_file_path = dir.join(crate_info.to_file_path());
-
-    if let Err(e) = create_dir_all(crate_file_path.parent().unwrap()) {
-        error!("cache: failed to create crate directory: {e}");
-        return;
-    }
-
-    match File::create(crate_file_path) {
-        Ok(mut f) => {
-            f.write_all(data)
-                .unwrap_or_else(|e| error!("cache: failed to write crate file: {e}"));
-        }
-        Err(e) => {
-            error!("cache: failed to create crate file: {e}");
-        }
-    }
-}
-
-/// Fetches the cached crate package file from the local filesystem, if present.
-fn cache_fetch_crate(dir: &Path, crate_info: &CrateInfo) -> Option<Vec<u8>> {
-    read(dir.join(crate_info.to_file_path())).ok()
 }
 
 /// Logs network errors when sending HTTP responses.
