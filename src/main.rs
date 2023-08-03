@@ -25,7 +25,9 @@ use url::Url;
 
 use crate::config_json::{gen_config_json_file, is_config_json_url};
 use crate::crate_info::CrateInfo;
-use crate::file_cache::{cache_fetch_crate, cache_store_crate};
+use crate::file_cache::{
+    cache_fetch_crate, cache_fetch_index_entry, cache_store_crate, cache_store_index_entry,
+};
 use crate::index_entry::IndexEntry;
 
 /// Default listen address and port
@@ -78,6 +80,9 @@ struct ProxyConfig {
 
     /// External URL of this proxy server (defaults to [`DEFAULT_PROXY_URL`])
     proxy_url: Url,
+
+    /// Registry index cache directory (defaults to [`DEFAULT_CACHE_DIR`])
+    index_dir: PathBuf,
 
     /// Crate files cache directory (defaults to [`DEFAULT_CACHE_DIR`])
     crates_dir: PathBuf,
@@ -295,6 +300,8 @@ fn forward_index_request(request: Request, entry: IndexEntry, config: ProxyConfi
                     "fetch: successfully got index entry for {entry}",
                     entry = response.entry
                 );
+
+                cache_store_index_entry(&config.index_dir, &response.entry, &response.data);
             } else {
                 debug!(
                     "fetch: cached index entry for {entry} is up to date",
@@ -361,7 +368,20 @@ fn handle_index_request(request: Request, index_url: &str, config: &ProxyConfig)
         }
     }
 
-    forward_index_request(request, index_entry, config.clone());
+    if let Some(data) = cache_fetch_index_entry(&config.index_dir, &index_entry) {
+        debug!("proxy: local index cache hit for {index_entry}");
+
+        // TODO: Add cache control metadata.
+        let response = IndexResponse {
+            entry: index_entry,
+            status: 200,
+            data,
+        };
+
+        send_index_entry_data_response(request, response);
+    } else {
+        forward_index_request(request, index_entry, config.clone());
+    }
 }
 
 /// Processes one HTTP GET request.
@@ -509,7 +529,13 @@ fn main() {
     info!("proxy: using proxy server URL: {proxy_url}");
 
     let cache_dir = PathBuf::from(cache_dir_string);
+    let index_dir = cache_dir.join("index");
     let crates_dir = cache_dir.join("crates");
+
+    info!(
+        "cache: using index directory: {}",
+        index_dir.to_string_lossy()
+    );
 
     info!(
         "cache: using crates directory: {}",
@@ -520,6 +546,7 @@ fn main() {
         index_url,
         upstream_url,
         proxy_url,
+        index_dir,
         crates_dir,
     };
 

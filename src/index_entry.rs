@@ -1,6 +1,7 @@
 //! Registry index entry handling helpers
 
 use std::fmt::{Display, Formatter, Result};
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use httpdate::{fmt_http_date, parse_http_date};
@@ -92,6 +93,12 @@ impl IndexEntry {
                 second = &name[2..4]
             ),
         }
+    }
+
+    /// Builds the relative index entry file path for cache storage.
+    #[must_use]
+    pub fn to_file_path(&self) -> PathBuf {
+        PathBuf::from(self.to_index_url())
     }
 }
 
