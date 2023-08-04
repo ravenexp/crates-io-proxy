@@ -58,6 +58,20 @@ impl IndexEntry {
         }
     }
 
+    /// Gets the crate name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Checks if this index entry file contents is the same
+    /// as `other` according to the associated metadata.
+    #[must_use]
+    pub fn is_equivalent(&self, other: &IndexEntry) -> bool {
+        (self.etag().is_some() && (self.etag() == other.etag()))
+            || (self.last_modified().is_some() && (self.last_modified() == other.last_modified()))
+    }
+
     /// Gets the HTTP entity tag metadata.
     pub fn etag(&self) -> Option<&str> {
         self.etag.as_deref()

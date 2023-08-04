@@ -9,9 +9,11 @@ mod config_json;
 mod crate_info;
 mod file_cache;
 mod index_entry;
+mod metadata_cache;
 
 use std::env;
 use std::fmt::Display;
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -29,6 +31,7 @@ use crate::file_cache::{
     cache_fetch_crate, cache_fetch_index_entry, cache_store_crate, cache_store_index_entry,
 };
 use crate::index_entry::IndexEntry;
+use crate::metadata_cache::{metadata_fetch_index_entry, metadata_store_index_entry};
 
 /// Default listen address and port
 const LISTEN_ADDRESS: &str = "0.0.0.0:3080";
@@ -220,24 +223,55 @@ fn send_crate_data_response(request: Request, data: Vec<u8>) {
     request.respond(response).unwrap_or_else(log_send_error);
 }
 
-/// Sends the registry index entry download response.
-fn send_index_entry_data_response(request: Request, response: IndexResponse) {
-    let content_type = INDEX_HTTP_CTYPE.parse::<Header>().unwrap();
-    let entry = response.entry;
-    let mut response = Response::from_data(response.data)
-        .with_status_code(response.status)
-        .with_header(content_type);
-
-    // Add cache control headers to all index responses.
+/// Adds cache control metadata headers to an index entry response.
+fn set_index_response_headers<R: Read>(
+    mut response: Response<R>,
+    entry: &IndexEntry,
+) -> Response<R> {
     if let Some(etag) = entry.etag() {
         let etag = Header::from_bytes("ETag", etag).unwrap();
         response = response.with_header(etag);
     };
+
     if let Some(last_modified) = entry.last_modified() {
         let last_modified = Header::from_bytes("Last-Modified", last_modified).unwrap();
         response = response.with_header(last_modified);
     };
 
+    response
+}
+
+/// Sends the registry index entry download response.
+fn send_index_entry_data_response(request: Request, index_response: IndexResponse) {
+    let content_type = INDEX_HTTP_CTYPE.parse::<Header>().unwrap();
+    let mut response = Response::from_data(index_response.data)
+        .with_status_code(index_response.status)
+        .with_header(content_type);
+
+    response = set_index_response_headers(response, &index_response.entry);
+    request.respond(response).unwrap_or_else(log_send_error);
+}
+
+/// Sends the registry index entry file download response.
+///
+/// This kind of response is always successful.
+fn send_index_entry_file_response(request: Request, entry: IndexEntry, data: Vec<u8>) {
+    // HTTP 200 OK
+    let status = 200;
+
+    let response = IndexResponse {
+        entry,
+        status,
+        data,
+    };
+
+    send_index_entry_data_response(request, response);
+}
+
+/// Sends the registry index entry HTTP 304 Not Modified response.
+fn send_index_entry_not_modified_response(request: Request, entry: &IndexEntry) {
+    let mut response = Response::empty(304);
+    response = set_index_response_headers(response, entry);
     request.respond(response).unwrap_or_else(log_send_error);
 }
 
@@ -309,6 +343,7 @@ fn forward_index_request(request: Request, entry: IndexEntry, config: ProxyConfi
                 );
             }
 
+            metadata_store_index_entry(&response.entry);
             send_index_entry_data_response(request, response);
         }
         Err(err) => send_fetch_error_response(request, err),
@@ -368,20 +403,26 @@ fn handle_index_request(request: Request, index_url: &str, config: &ProxyConfig)
         }
     }
 
-    if let Some(data) = cache_fetch_index_entry(&config.index_dir, &index_entry) {
-        debug!("proxy: local index cache hit for {index_entry}");
+    // Try to serve the request from the local index cache first.
+    // NOTE: The index file cache can not be used without matching metadata.
+    if let Some(cached_entry) = metadata_fetch_index_entry(index_entry.name()) {
+        // Check for the index metadata cache hit via ETag and Last-Modified fields.
+        if cached_entry.is_equivalent(&index_entry) {
+            debug!("proxy: index metadata cache hit for {index_entry}");
+            send_index_entry_not_modified_response(request, &cached_entry);
+            return;
+        }
 
-        // TODO: Add cache control metadata.
-        let response = IndexResponse {
-            entry: index_entry,
-            status: 200,
-            data,
-        };
-
-        send_index_entry_data_response(request, response);
-    } else {
-        forward_index_request(request, index_entry, config.clone());
+        // Check for the index file cache hit next.
+        if let Some(data) = cache_fetch_index_entry(&config.index_dir, &index_entry) {
+            debug!("proxy: index data cache hit for {index_entry}");
+            send_index_entry_file_response(request, cached_entry, data);
+            return;
+        }
     }
+
+    // Fall back to forwarding the request to the upstream registry.
+    forward_index_request(request, index_entry, config.clone());
 }
 
 /// Processes one HTTP GET request.
