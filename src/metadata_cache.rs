@@ -19,3 +19,8 @@ pub fn metadata_store_index_entry(entry: &IndexEntry) {
 pub fn metadata_fetch_index_entry(name: &str) -> Option<IndexEntry> {
     INDEX_CACHE.read().unwrap().get(name).map(ToOwned::to_owned)
 }
+
+/// Erases the cached index entry metadata from memory.
+pub fn metadata_invalidate_index_entry(entry: &IndexEntry) {
+    INDEX_CACHE.write().unwrap().remove(entry.name());
+}

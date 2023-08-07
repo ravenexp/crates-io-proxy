@@ -16,6 +16,7 @@ use std::fmt::Display;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use pico_args::Arguments;
 
@@ -31,7 +32,9 @@ use crate::file_cache::{
     cache_fetch_crate, cache_fetch_index_entry, cache_store_crate, cache_store_index_entry,
 };
 use crate::index_entry::IndexEntry;
-use crate::metadata_cache::{metadata_fetch_index_entry, metadata_store_index_entry};
+use crate::metadata_cache::{
+    metadata_fetch_index_entry, metadata_invalidate_index_entry, metadata_store_index_entry,
+};
 
 /// Default listen address and port
 const LISTEN_ADDRESS: &str = "0.0.0.0:3080";
@@ -53,6 +56,9 @@ const CRATES_API_PATH: &str = "/api/v1/crates/";
 
 /// Default crate files cache directory path
 const DEFAULT_CACHE_DIR: &str = "/var/cache/crates-io-proxy";
+
+/// Default index cache entry Time-to-Live in seconds
+const DEFAULT_CACHE_TTL_SECS: u64 = 3600;
 
 /// Default index entry download buffer capacity
 const INDEX_ENTRY_CAPACITY: usize = 0x10000;
@@ -89,6 +95,9 @@ struct ProxyConfig {
 
     /// Crate files cache directory (defaults to [`DEFAULT_CACHE_DIR`])
     crates_dir: PathBuf,
+
+    /// Index entry cache Time-to-Live (defaults to [`DEFAULT_CACHE_TTL_SECS`])
+    cache_ttl: Duration,
 }
 
 /// Registry index entry download response
@@ -177,6 +186,9 @@ fn download_index_entry(
     if let Some(last_modified) = response.header("Last-Modified") {
         entry.set_last_modified(last_modified);
     }
+
+    // Update the upstream server access timestamp.
+    entry.set_last_updated();
 
     let mut data: Vec<u8> = Vec::with_capacity(INDEX_ENTRY_CAPACITY);
     response
@@ -323,28 +335,53 @@ fn forward_download_request(request: Request, crate_info: CrateInfo, config: Pro
 /// Forwards the registry index entry download request to the upstream server.
 ///
 /// Processes the download request in a dedicated thread.
-fn forward_index_request(request: Request, entry: IndexEntry, config: ProxyConfig) {
+///
+/// If the requested index entry file already exists in the cache,
+/// attempts to reduce the amount of data transferred on both sides.
+fn forward_index_request(
+    request: Request,
+    entry: IndexEntry,
+    cached_entry: Option<IndexEntry>,
+    config: ProxyConfig,
+) {
     let thread_name = format!("worker-fetch-index-{entry}");
 
-    let thread_proc = move || match download_index_entry(&config.index_url, entry) {
+    // Select where the new HTTP request headers will come from.
+    let req_entry = cached_entry.unwrap_or_else(|| entry.clone());
+
+    let thread_proc = move || match download_index_entry(&config.index_url, req_entry) {
         Ok(response) => {
             // Check for HTTP 200 or HTTP 304 statuses.
             if response.status == 200 {
-                info!(
-                    "fetch: successfully got index entry for {entry}",
-                    entry = response.entry
-                );
-
+                info!("fetch: successfully got index entry for {entry}");
                 cache_store_index_entry(&config.index_dir, &response.entry, &response.data);
             } else {
-                debug!(
-                    "fetch: cached index entry for {entry} is up to date",
-                    entry = response.entry
-                );
+                debug!("fetch: cached index entry for {entry} is up to date");
             }
 
             metadata_store_index_entry(&response.entry);
-            send_index_entry_data_response(request, response);
+
+            if response.entry.is_equivalent(&entry) {
+                // Updated index entry file metadata matches that of the client request.
+                debug!("proxy: forwarding the up to date status for {entry}");
+                send_index_entry_not_modified_response(request, &response.entry);
+            } else if response.status == 200 {
+                // Upstream registry sent us updated index entry data.
+                debug!("proxy: forwarding new index data for {entry}");
+                send_index_entry_data_response(request, response);
+            } else if let Some(data) = cache_fetch_index_entry(&config.index_dir, &entry) {
+                // Upstream registry sent us 304 Not Modified,
+                // but the client does not have this file cached.
+                // Fetch the index entry file from the local filesystem cache.
+                debug!("proxy: forwarding cached index data for {entry}");
+                send_index_entry_file_response(request, response.entry, data);
+            } else {
+                // Something went very wrong with the local filesystem cache.
+                error!("cache: lost index cache file for {entry}");
+                // Invalidate the volatile metadata cache and ask the client to retry.
+                metadata_invalidate_index_entry(&entry);
+                send_error_response(request, 503);
+            }
         }
         Err(err) => send_fetch_error_response(request, err),
     };
@@ -406,6 +443,13 @@ fn handle_index_request(request: Request, index_url: &str, config: &ProxyConfig)
     // Try to serve the request from the local index cache first.
     // NOTE: The index file cache can not be used without matching metadata.
     if let Some(cached_entry) = metadata_fetch_index_entry(index_entry.name()) {
+        // Expired cache entries require a new request to the upstream registry.
+        if cached_entry.is_expired_with_ttl(&config.cache_ttl) {
+            info!("proxy: index cache expired for {index_entry}, refreshing...");
+            forward_index_request(request, index_entry, Some(cached_entry), config.clone());
+            return;
+        }
+
         // Check for the index metadata cache hit via ETag and Last-Modified fields.
         if cached_entry.is_equivalent(&index_entry) {
             debug!("proxy: index metadata cache hit for {index_entry}");
@@ -422,7 +466,7 @@ fn handle_index_request(request: Request, index_url: &str, config: &ProxyConfig)
     }
 
     // Fall back to forwarding the request to the upstream registry.
-    forward_index_request(request, index_entry, config.clone());
+    forward_index_request(request, index_entry, None, config.clone());
 }
 
 /// Processes one HTTP GET request.
@@ -490,11 +534,13 @@ fn usage() {
     println!("    -I, --index-url URL        upstream index URL (https://index.crates.io/)");
     println!("    -S, --proxy-url URL        this proxy server URL (http://localhost/)");
     println!("    -C, --cache-dir DIR        proxy cache directory (/var/cache/crates-io-proxy)");
+    println!("    -T, --cache-ttl SECONDS    index cache entry Time-to-Live in seconds (3600)");
     println!("\nEnvironment:");
     println!("    INDEX_CRATES_IO_URL        same as --index-url option");
     println!("    CRATES_IO_URL              same as --upstream-url option");
     println!("    CRATES_IO_PROXY_URL        same as --proxy-url option");
     println!("    CRATES_IO_PROXY_CACHE_DIR  same as --cache-dir option");
+    println!("    CRATES_IO_PROXY_CACHE_TTL  same as --cache-ttl option");
 }
 
 fn main() {
@@ -505,6 +551,10 @@ fn main() {
         env::var("CRATES_IO_PROXY_URL").unwrap_or_else(|_| DEFAULT_PROXY_URL.to_string());
     let default_cache_dir =
         env::var("CRATES_IO_PROXY_CACHE_DIR").unwrap_or_else(|_| DEFAULT_CACHE_DIR.to_string());
+    let default_cache_ttl_secs: u64 = env::var("CRATES_IO_PROXY_CACHE_TTL")
+        .map_or(DEFAULT_CACHE_TTL_SECS, |s| {
+            s.parse().expect("bad CRATES_IO_PROXY_CACHE_DIR value")
+        });
 
     let mut verbose: u32 = 0;
     let mut args = Arguments::from_env();
@@ -548,6 +598,11 @@ fn main() {
         .expect("bad cache directory argument")
         .unwrap_or(default_cache_dir);
 
+    let cache_ttl_secs: u64 = args
+        .opt_value_from_str(["-T", "--cache-ttl"])
+        .expect("bad cache TTL argument")
+        .unwrap_or(default_cache_ttl_secs);
+
     let loglevel = match verbose {
         0 => "warn",
         1 => "info",
@@ -572,6 +627,7 @@ fn main() {
     let cache_dir = PathBuf::from(cache_dir_string);
     let index_dir = cache_dir.join("index");
     let crates_dir = cache_dir.join("crates");
+    let cache_ttl = Duration::from_secs(cache_ttl_secs);
 
     info!(
         "cache: using index directory: {}",
@@ -583,12 +639,15 @@ fn main() {
         crates_dir.to_string_lossy()
     );
 
+    info!("cache: using index entry TTL = {cache_ttl_secs} seconds");
+
     let config = ProxyConfig {
         index_url,
         upstream_url,
         proxy_url,
         index_dir,
         crates_dir,
+        cache_ttl,
     };
 
     // Start the main HTTP server.

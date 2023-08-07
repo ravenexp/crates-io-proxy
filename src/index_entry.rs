@@ -2,7 +2,7 @@
 
 use std::fmt::{Display, Formatter, Result};
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use httpdate::{fmt_http_date, parse_http_date};
 
@@ -15,8 +15,8 @@ pub struct IndexEntry {
     etag: Option<String>,
     /// Index file modification time
     mtime: Option<SystemTime>,
-    /// Last index update check time
-    atime: Option<SystemTime>,
+    /// Last index entry update check time
+    atime: Option<Instant>,
 }
 
 impl Display for IndexEntry {
@@ -72,6 +72,12 @@ impl IndexEntry {
             || (self.last_modified().is_some() && (self.last_modified() == other.last_modified()))
     }
 
+    /// Checks if this index entry is expired according for the TTL given.
+    #[must_use]
+    pub fn is_expired_with_ttl(&self, ttl: &Duration) -> bool {
+        self.atime.map_or(false, |atime| atime.elapsed() > *ttl)
+    }
+
     /// Gets the HTTP entity tag metadata.
     pub fn etag(&self) -> Option<&str> {
         self.etag.as_deref()
@@ -90,6 +96,11 @@ impl IndexEntry {
     /// Sets the HTTP Last-Modified metadata.
     pub fn set_last_modified(&mut self, last_modified: &str) {
         self.mtime = parse_http_date(last_modified).ok();
+    }
+
+    /// Updates the last upstream server access time metadata.
+    pub fn set_last_updated(&mut self) {
+        self.atime = Some(Instant::now());
     }
 
     /// Builds the index entry download URL (relative).
