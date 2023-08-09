@@ -1,6 +1,6 @@
 [package]
 name = "crates-io-proxy"
-description = "A dumb caching proxy for the crates.io download API"
+description = "Caching HTTP proxy server for the crates.io registry"
 version = "0.2.0"
 authors = ["Sergey Kvachonok <ravenexp@gmail.com>"]
 edition = "2021"
