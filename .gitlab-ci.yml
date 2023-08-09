@@ -13,5 +13,5 @@ push:
       - tags
     script:
       - docker tag crates-io-proxy:latest ${PLG_CI_DOCKER_PUSH}/crates-io-proxy:latest
-      - docker tag crates-io-proxy:${IMAGE_VERSION} ${PLG_CI_DOCKER_PUSH}/crates-io-proxy:${IMAGE_VERSION}
+      - docker tag crates-io-proxy:${CI_COMMIT_REF_NAME} ${PLG_CI_DOCKER_PUSH}/crates-io-proxy:${CI_COMMIT_REF_NAME}
       - docker push --all-tags ${PLG_CI_DOCKER_PUSH}/crates-io-proxy
