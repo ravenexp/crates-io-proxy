@@ -1,9 +1,26 @@
-//! Caching HTTP proxy server for crates.io downloads
-//! =================================================
+//! Caching HTTP proxy server for the `crates.io` registry
+//! ======================================================
 //!
-//! Listens to HTTP GET requests at `/api/v1/crates/{crate}/{version}/download`,
+//! `crates-io-proxy` implements transparent caching for both
+//! the sparse registry index at <https://index.crates.io/> and
+//! the static crate file download server.
+//!
+//! Two independent HTTP proxy endpoints are implemented:
+//!
+//! 1. Listens to HTTP GET requests at `/index/.../{crate}`,
+//! forwards them to <https://index.crates.io/> and caches the downloaded registry
+//! index entries as JSON text files on the local filesystem.
+//!
+//! 2. Listens to HTTP GET requests at `/api/v1/crates/{crate}/{version}/download`,
 //! forwards them to <https://crates.io/> and caches the downloaded crates as
 //! `.crate` files on the local filesystem.
+//!
+//! Subsequent sparse registry index and crate download API hits are serviced
+//! using the locally cached index entry and crate files.
+//!
+//! As a convenience feature, the download requests for the `config.json` file
+//! found at the sparse index root are served with a replacement file,
+//! which changes the crate download URL to point to this same proxy server.
 
 mod config_json;
 mod crate_info;
@@ -532,7 +549,7 @@ fn usage() {
     println!("    -L, --listen ADDRESS:PORT  address and port to listen at (0.0.0.0:3080)");
     println!("    -U, --upstream-url URL     upstream download URL (https://crates.io/)");
     println!("    -I, --index-url URL        upstream index URL (https://index.crates.io/)");
-    println!("    -S, --proxy-url URL        this proxy server URL (http://localhost/)");
+    println!("    -S, --proxy-url URL        this proxy server URL (http://localhost:3080/)");
     println!("    -C, --cache-dir DIR        proxy cache directory (/var/cache/crates-io-proxy)");
     println!("    -T, --cache-ttl SECONDS    index cache entry Time-to-Live in seconds (3600)");
     println!("\nEnvironment:");

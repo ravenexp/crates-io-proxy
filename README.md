@@ -1,32 +1,66 @@
-Caching HTTP proxy server for crates.io downloads
-=================================================
+Caching HTTP proxy server for the `crates.io` registry
+======================================================
 
 Introduction
 ------------
 
-The proxy server listens to HTTP GET requests at
-`/api/v1/crates/{crate}/{version}/download`,
+`crates-io-proxy` implements transparent caching for both
+the sparse registry index at <https://index.crates.io/> and
+the static crate file download server.
+
+Two independent HTTP proxy endpoints are implemented:
+
+1. Listens to HTTP GET requests at `/index/.../{crate}`,
+forwards them to <https://index.crates.io/> and caches the downloaded registry
+index entries as JSON text files on the local filesystem.
+
+2. Listens to HTTP GET requests at `/api/v1/crates/{crate}/{version}/download`,
 forwards them to <https://crates.io/> and caches the downloaded crates as
 `.crate` files on the local filesystem.
-Subsequent download API hits are serviced using the locally cached crate files.
 
-To use the proxy server, clone and rehost the [crates.io index] repository
-from GitHub and change `"dl"` parameter in `config.json` file in
-the repository root to point to the proxy server instead:
+Subsequent sparse registry index and crate download API hits are serviced
+using the locally cached index entry and crate files.
 
-```
-{
-    "dl": "https://crates-io-proxy.example.com/api/v1/crates",
-    "api": "https://crates.io"
-}
-```
+As a convenience feature, the download requests for the `config.json` file
+found at the sparse index root are served with a replacement file,
+which changes the crate download URL to point to this same proxy server.
 
-Cargo can be told to use the package index mirror by using the source
+Usage
+-----
+
+Cargo can be told to use the crate registry mirror by using the source
 replacement feature. Add the following lines to your `.cargo/config`:
 
 ```
 [source.crates-io]
-registry = "https://crates-io-mirror.example.com/crates-io-index.git"
+replace-with = "crates-io-mirror"
+
+[registries.crates-io-mirror]
+index = "sparse+http://crates-io-proxy.example.com:3080/index/"
+```
+
+Using static git index mirror
+-----------------------------
+
+`crates-io-proxy` can also be used as the crate file download proxy server
+with a separate git-based registry index.
+
+To use this configuration, clone and rehost the [crates.io index] repository
+from GitHub and change `"dl"` parameter in `config.json` file in
+the repository root to point to the `crates-io-proxy` server instead:
+
+```
+{
+    "dl": "https://crates-io-proxy.example.com:3080/api/v1/crates",
+    "api": "https://crates.io"
+}
+```
+
+In this configuration, the git registry index link should be used instead:
+
+```
+[registries.crates-io-mirror]
+index = "https://crates-io-index.example.com/crates-io-index.git"
 ```
 
 Configuration
@@ -46,13 +80,18 @@ Options:
     -h, --help                 print help and exit
     -V, --version              print version and exit
     -L, --listen ADDRESS:PORT  address and port to listen at (0.0.0.0:3080)
-    -U, --upstream-url URL     upstream crates.io URL (https://crates.io/)
+    -U, --upstream-url URL     upstream download URL (https://crates.io/)
+    -I, --index-url URL        upstream index URL (https://index.crates.io/)
+    -S, --proxy-url URL        this proxy server URL (http://localhost:3080/)
     -C, --cache-dir DIR        proxy cache directory (/var/cache/crates-io-proxy)
+    -T, --cache-ttl SECONDS    index cache entry Time-to-Live in seconds (3600)
 
 Environment:
+    INDEX_CRATES_IO_URL        same as --index-url option
     CRATES_IO_URL              same as --upstream-url option
+    CRATES_IO_PROXY_URL        same as --proxy-url option
     CRATES_IO_PROXY_CACHE_DIR  same as --cache-dir option
-
+    CRATES_IO_PROXY_CACHE_TTL  same as --cache-ttl option
 ```
 
 [crates.io index]: https://github.com/rust-lang/crates.io-index
