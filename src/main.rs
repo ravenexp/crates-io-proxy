@@ -47,6 +47,7 @@ use crate::config_json::{gen_config_json_file, is_config_json_url};
 use crate::crate_info::CrateInfo;
 use crate::file_cache::{
     cache_fetch_crate, cache_fetch_index_entry, cache_store_crate, cache_store_index_entry,
+    cache_try_find_index_entry,
 };
 use crate::index_entry::IndexEntry;
 use crate::metadata_cache::{
@@ -447,12 +448,12 @@ fn handle_index_request(request: Request, index_url: &str, config: &ProxyConfig)
     for header in request.headers() {
         if header.field.equiv("If-None-Match") {
             let etag = header.value.as_str();
-            debug!("proxy: checking known index entry {index_entry} with ETag {etag}");
+            debug!("proxy: checking known index entry {index_entry} with ETag: {etag}");
             index_entry.set_etag(etag);
         }
         if header.field.equiv("If-Modified-Since") {
             let last_modified = header.value.as_str();
-            debug!("proxy: checking known index entry {index_entry} with Last-Modified {last_modified}");
+            debug!("proxy: checking known index entry {index_entry} with Last-Modified: {last_modified}");
             index_entry.set_last_modified(last_modified);
         }
     }
@@ -482,8 +483,19 @@ fn handle_index_request(request: Request, index_url: &str, config: &ProxyConfig)
         }
     }
 
+    // Try to recreate the index entry metadata from the cached file mtime.
+    let mtimed_entry = cache_try_find_index_entry(&config.index_dir, index_entry.name());
+
+    if let Some(entry) = &mtimed_entry {
+        let last_modified = entry.last_modified().unwrap();
+
+        info!(
+            "proxy: recreated index cache metadata for {entry} with Last-Modified: {last_modified}"
+        );
+    }
+
     // Fall back to forwarding the request to the upstream registry.
-    forward_index_request(request, index_entry, None, config.clone());
+    forward_index_request(request, index_entry, mtimed_entry, config.clone());
 }
 
 /// Processes one HTTP GET request.

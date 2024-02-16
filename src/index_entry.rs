@@ -79,13 +79,21 @@ impl IndexEntry {
     }
 
     /// Gets the HTTP entity tag metadata.
+    #[must_use]
     pub fn etag(&self) -> Option<&str> {
         self.etag.as_deref()
     }
 
     /// Gets the HTTP Last-Modified metadata.
+    #[must_use]
     pub fn last_modified(&self) -> Option<String> {
         self.mtime.map(fmt_http_date)
+    }
+
+    /// Gets the file modification time metadata.
+    #[must_use]
+    pub fn mtime(&self) -> Option<SystemTime> {
+        self.mtime
     }
 
     /// Sets the HTTP entity tag metadata.
@@ -96,6 +104,11 @@ impl IndexEntry {
     /// Sets the HTTP Last-Modified metadata.
     pub fn set_last_modified(&mut self, last_modified: &str) {
         self.mtime = parse_http_date(last_modified).ok();
+    }
+
+    /// Sets the file modification time metadata.
+    pub fn set_mtime(&mut self, mtime: SystemTime) {
+        self.mtime = Some(mtime);
     }
 
     /// Updates the last upstream server access time metadata.
