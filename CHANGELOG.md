@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2024-02-19
+
+### Build configuration
+
+- Update dependencies and Cargo metadata
+
+### Features
+
+- Store the cached index entry mtime in files
+- Recover from index connection failures
+
 ## [0.2.0] - 2023-08-09
 
 ### Build configuration
