@@ -401,7 +401,25 @@ fn forward_index_request(
                 send_error_response(request, 503);
             }
         }
-        Err(err) => send_fetch_error_response(request, err),
+        Err(err) => {
+            if let ureq::Error::Transport(err) = err.as_ref() {
+                if let Some(data) = cache_fetch_index_entry(&config.index_dir, &entry) {
+                    error!("fetch: index connection failed: {err}");
+
+                    // The upstream registry can not be reached at the moment, likely
+                    // due to an intermittent network failure.
+                    // Serve a possibly stale index entry file from the local filesystem
+                    // cache anyway to keep the clients running.
+                    warn!("proxy: forwarding possibly stale cached index data for {entry}");
+
+                    send_index_entry_file_response(request, entry, data);
+                    return;
+                }
+            }
+
+            // Forward non-recoverable download errors back to the clients.
+            send_fetch_error_response(request, err);
+        }
     };
 
     std::thread::Builder::new()
