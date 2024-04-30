@@ -94,4 +94,13 @@ Environment:
     CRATES_IO_PROXY_CACHE_TTL  same as --cache-ttl option
 ```
 
+Advanced configuration
+----------------------
+
+By default, `crates-io-proxy` uses embedded TLS trusted root certificates.
+It is possible to configure it to use the system certificate store
+at the build time by setting the `native-certs` feature flag.
+
+Configuring this behavior at the run time is not supported yet.
+
 [crates.io index]: https://github.com/rust-lang/crates.io-index
