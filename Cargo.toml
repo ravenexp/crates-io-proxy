@@ -11,6 +11,9 @@ keywords = ["crates", "cargo", "registry", "proxy", "cache"]
 categories = ["development-tools", "caching", "web-programming::http-server"]
 readme = "README.md"
 
+[features]
+native-certs = [ "ureq/native-certs" ]
+
 [dependencies]
 tiny_http = "0.12"
 httpdate = "1.0"
