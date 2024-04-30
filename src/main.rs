@@ -96,6 +96,9 @@ const JSON_HTTP_CTYPE: &str = "Content-Type: application/json; charset=utf-8";
 /// Program version tag: `"<major>.<minor>.<patch>"`
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// HTTP client User Agent string
+const HTTP_USER_AGENT: &str = concat!("crates-io-proxy/", env!("CARGO_PKG_VERSION"));
+
 /// Proxy server configuration
 #[derive(Debug, Clone)]
 struct ProxyConfig {
@@ -135,7 +138,10 @@ struct IndexResponse {
 /// The global agent instance is required to use HTTP request pipelining.
 fn ureq_agent() -> ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
-    AGENT.get_or_init(ureq::agent).clone()
+
+    AGENT
+        .get_or_init(|| ureq::builder().user_agent(HTTP_USER_AGENT).build())
+        .clone()
 }
 
 /// Downloads the crate file from the upstream download server
