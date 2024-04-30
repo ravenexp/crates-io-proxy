@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.2] - 2024-04-30
+
+### Build configuration
+
+- Update dependencies and Cargo metadata
+- Add `native-certs` feature flag
+
+### CI configuration
+
+- Test building with optional features enabled
+
+### Documentation
+
+- Document the new `native-certs` feature flag
+
+### Features
+
+- Add HTTP client `User-Agent` header
+
 ## [0.2.1] - 2024-02-19
 
 ### Build configuration
