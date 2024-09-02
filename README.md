@@ -11,12 +11,12 @@ the static crate file download server.
 Two independent HTTP proxy endpoints are implemented:
 
 1. Listens to HTTP GET requests at `/index/.../{crate}`,
-forwards them to <https://index.crates.io/> and caches the downloaded registry
-index entries as JSON text files on the local filesystem.
+   forwards them to <https://index.crates.io/> and caches the downloaded registry
+   index entries as JSON text files on the local filesystem.
 
 2. Listens to HTTP GET requests at `/api/v1/crates/{crate}/{version}/download`,
-forwards them to <https://crates.io/> and caches the downloaded crates as
-`.crate` files on the local filesystem.
+   forwards them to <https://crates.io/> and caches the downloaded crates as
+   `.crate` files on the local filesystem.
 
 Subsequent sparse registry index and crate download API hits are serviced
 using the locally cached index entry and crate files.
