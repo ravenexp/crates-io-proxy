@@ -31,7 +31,7 @@ mod metadata_cache;
 use std::env;
 use std::fmt::Display;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -538,11 +538,29 @@ fn handle_get_request(request: Request, config: &ProxyConfig) {
     };
 }
 
-/// Runs HTTP proxy server forever.
-fn main_loop(listen_addr: &str, config: &ProxyConfig) -> ! {
-    info!("proxy: starting HTTP server at: {listen_addr}");
+/// Server listening address
+enum ListenAddress {
+    /// IP address + port
+    SocketAddr(String),
+    /// Unix domain socket path
+    UnixPath(String),
+}
 
-    let server = Server::http(listen_addr).expect("failed to start the HTTP server");
+/// Runs HTTP proxy server forever.
+fn main_loop(listen_addr: &ListenAddress, config: &ProxyConfig) -> ! {
+    let server = match listen_addr {
+        ListenAddress::SocketAddr(addr) => {
+            info!("proxy: starting HTTP server at: {addr}");
+            Server::http(addr).expect("failed to start the HTTP server")
+        }
+        ListenAddress::UnixPath(path) => {
+            info!("proxy: starting HTTP server at Unix socket {path}");
+            let path = Path::new(path);
+            // Reap stale socket files before binding.
+            std::fs::remove_file(path).ok();
+            Server::http_unix(path).expect("failed to start the HTTP server")
+        }
+    };
 
     // Main HTTP request accept loop.
     loop {
@@ -583,6 +601,7 @@ fn usage() {
     println!("    -h, --help                 print help and exit");
     println!("    -V, --version              print version and exit");
     println!("    -L, --listen ADDRESS:PORT  address and port to listen at (0.0.0.0:3080)");
+    println!("        --listen-unix PATH     Unix domain socket path to listen at");
     println!("    -U, --upstream-url URL     upstream download URL (https://crates.io/)");
     println!("    -I, --index-url URL        upstream index URL (https://index.crates.io/)");
     println!("    -S, --proxy-url URL        this proxy server URL (http://localhost:3080/)");
@@ -626,7 +645,11 @@ fn main() {
         verbose += 1;
     }
 
-    let listen_addr = args
+    let listen_addr_unix = args
+        .opt_value_from_str("--listen-unix")
+        .expect("bad listen socket path");
+
+    let listen_addr_ip = args
         .opt_value_from_str(["-L", "--listen"])
         .expect("bad listen address argument")
         .unwrap_or_else(|| LISTEN_ADDRESS.to_string());
@@ -701,6 +724,11 @@ fn main() {
         index_dir,
         crates_dir,
         cache_ttl,
+    };
+
+    let listen_addr = match listen_addr_unix {
+        Some(unix_path) => ListenAddress::UnixPath(unix_path),
+        None => ListenAddress::SocketAddr(listen_addr_ip),
     };
 
     // Start the main HTTP server.

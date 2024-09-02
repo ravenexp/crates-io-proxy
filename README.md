@@ -80,6 +80,7 @@ Options:
     -h, --help                 print help and exit
     -V, --version              print version and exit
     -L, --listen ADDRESS:PORT  address and port to listen at (0.0.0.0:3080)
+        --listen-unix PATH     Unix domain socket path to listen at
     -U, --upstream-url URL     upstream download URL (https://crates.io/)
     -I, --index-url URL        upstream index URL (https://index.crates.io/)
     -S, --proxy-url URL        this proxy server URL (http://localhost:3080/)
