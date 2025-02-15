@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.4] - 2025-02-15
+
+### 🐛 Bug Fixes
+
+- Accept `Transfer-Encoding: chunked` downloads
+
+### 🛠️ Build
+
+- Update dependencies and Cargo metadata
+
+### ⚙️ Miscellaneous Tasks
+
+- Fix new clippy warnings
+
 ## [0.2.3] - 2024-09-02
 
 ### 🚀 Features
