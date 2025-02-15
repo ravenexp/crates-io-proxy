@@ -1,7 +1,7 @@
 [package]
 name = "crates-io-proxy"
 description = "Caching HTTP proxy server for the crates.io registry"
-version = "0.2.3"
+version = "0.2.4"
 authors = ["Sergey Kvachonok <ravenexp@gmail.com>"]
 edition = "2021"
 homepage = "https://github.com/ravenexp/crates-io-proxy"
@@ -18,7 +18,7 @@ native-certs = [ "ureq/native-certs" ]
 tiny_http = "0.12"
 httpdate = "1.0"
 url = "2.5"
-ureq = "2.9"
+ureq = "2.12"
 pico-args = { version = "0.5", features = ["combined-flags"] }
 log = "0.4"
 env_logger = { version = "0.11", default-features = false }
