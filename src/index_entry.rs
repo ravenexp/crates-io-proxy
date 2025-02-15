@@ -75,7 +75,7 @@ impl IndexEntry {
     /// Checks if this index entry is expired according for the TTL given.
     #[must_use]
     pub fn is_expired_with_ttl(&self, ttl: &Duration) -> bool {
-        self.atime.map_or(false, |atime| atime.elapsed() > *ttl)
+        self.atime.is_some_and(|atime| atime.elapsed() > *ttl)
     }
 
     /// Gets the HTTP entity tag metadata.
