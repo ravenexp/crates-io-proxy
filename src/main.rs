@@ -144,6 +144,16 @@ fn ureq_agent() -> ureq::Agent {
         .clone()
 }
 
+/// Makes boxed custom ureq status errors for `download_crate()`.
+fn ureq_status_error(status_code: u16, msg: &str) -> Box<ureq::Error> {
+    assert!(status_code >= 400);
+
+    Box::new(ureq::Error::Status(
+        status_code,
+        ureq::Response::new(status_code, msg, msg).unwrap(),
+    ))
+}
+
 /// Downloads the crate file from the upstream download server
 /// (usually <https://crates.io/>).
 fn download_crate(site_url: &Url, crate_info: &CrateInfo) -> Result<Vec<u8>, Box<ureq::Error>> {
@@ -160,13 +170,11 @@ fn download_crate(site_url: &Url, crate_info: &CrateInfo) -> Result<Vec<u8>, Box
 
     if let Some(content_len) = response.header("Content-Length") {
         let Ok(len) = content_len.parse::<usize>() else {
-            // HTTP 400 Invalid Header
-            return Err(Box::new(ureq::Error::Status(400, response)));
+            return Err(ureq_status_error(400, "Invalid header"));
         };
 
         if len > MAX_CRATE_SIZE {
-            // HTTP 507 Insufficient Storage
-            return Err(Box::new(ureq::Error::Status(507, response)));
+            return Err(ureq_status_error(507, "Insufficient storage"));
         }
 
         let mut data: Vec<u8> = Vec::with_capacity(len);
@@ -177,8 +185,25 @@ fn download_crate(site_url: &Url, crate_info: &CrateInfo) -> Result<Vec<u8>, Box
 
         Ok(data)
     } else {
-        // HTTP 502 Bad Gateway
-        Err(Box::new(ureq::Error::Status(502, response)))
+        // Got no "Content-Length" header, most likely because "Transfer-Encoding: chunked"
+        // is being sent by the server (crates.io servers do not do this).
+        //
+        // Using an arbitrary initial estimate for the total response size...
+        let mut data: Vec<u8> = Vec::with_capacity(MAX_CRATE_SIZE / 256);
+
+        response
+            .into_reader()
+            .take(MAX_CRATE_SIZE as u64)
+            .read_to_end(&mut data)
+            .map_err(|e| Box::new(e.into()))?;
+
+        // Abort download here if the crate file has been truncated by
+        // the `reader.take()` limit above.
+        if data.len() >= MAX_CRATE_SIZE {
+            return Err(ureq_status_error(507, "Insufficient storage"));
+        }
+
+        Ok(data)
     }
 }
 
