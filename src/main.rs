@@ -140,7 +140,21 @@ fn ureq_agent() -> ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
 
     AGENT
-        .get_or_init(|| ureq::builder().user_agent(HTTP_USER_AGENT).build())
+        .get_or_init(|| {
+            let mut builder = ureq::builder().user_agent(HTTP_USER_AGENT);
+
+            let proxy_url = env::var("https_proxy")
+                .or_else(|_| env::var("HTTPS_PROXY"))
+                .ok();
+
+            if let Some(url) = proxy_url {
+                if let Ok(proxy) = ureq::Proxy::new(url) {
+                    builder = builder.proxy(proxy);
+                }
+            }
+
+            builder.build()
+        })
         .clone()
 }
 
